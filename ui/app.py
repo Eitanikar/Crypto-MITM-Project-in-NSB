@@ -14,7 +14,7 @@ from common.protocol import Transaction
 # 🔧 הגדרות רשת - כאן מעדכנים את ה-IP
 # ==========================================
 # שים לב: זה ה-IP של מכונת ה-Kali שלך שראינו בתמונה
-SERVER_IP = "192.168.1.104"
+SERVER_IP = "192.168.1.205"
 SERVER_PORT = "5000"
 SERVER_URL = f"http://{SERVER_IP}:{SERVER_PORT}"
 
