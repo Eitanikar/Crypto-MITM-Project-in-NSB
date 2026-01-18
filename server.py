@@ -1,96 +1,158 @@
 from flask import Flask, request, jsonify
-from wallet.wallet import Wallet
-from common.protocol import Transaction
+import time
 import ecdsa
 import binascii
+import json
+import os
+
+# ייבוא המחלקות שלך
+from wallet.wallet import Wallet
+from common.protocol import Transaction
 
 app = Flask(__name__)
 
-# יצירת ארנק "בנק" לשרת שישמור את ההיסטוריה
-# נשמור אותו בנתיב נפרד כדי לא לדרוס את הארנק של אליס אם קיים שם
+# === אתחול ה-Ledger של הבנק ===
 server_ledger = Wallet(owner="Network_Ledger", db_path="./data/server_ledger.json")
 
-def verify_signature(tx: Transaction):
-    """בודק אם החתימה תואמת לתוכן העסקה ולשולח"""
-    if not tx.signature:
-        return False
+# --- פונקציית עזר לשמירה בקבצים אישיים ---
+def save_to_personal_file(address, record):
+    """
+    שומר רשומה לקובץ JSON ייחודי לפי כתובת הארנק.
+    שם הקובץ יהיה הכתובת עצמה (למשל: data/3a4f...json).
+    """
+    if not address:
+        return
 
+    filename = f"./data/{address}.json"
+    personal_history = []
+
+    # מנסים לטעון היסטוריה קיימת אם הקובץ קיים
+    if os.path.exists(filename):
+        try:
+            with open(filename, "r") as f:
+                personal_history = json.load(f)
+        except:
+            pass 
+            
+    # הוספת הרשומה החדשה
+    personal_history.append(record)
+    
+    # שמירה לקובץ
+    with open(filename, "w") as f:
+        json.dump(personal_history, f, indent=4)
+
+
+def verify_signature(tx: Transaction):
+    """בדיקת חתימה קריפטוגרפית"""
     try:
-        # המרת המפתח הציבורי מ-Hex לאובייקט
         public_key_bytes = binascii.unhexlify(tx.sender)
-        verifying_key = ecdsa.VerifyingKey.from_string(public_key_bytes, curve=ecdsa.SECP256k1)
-        
-        # שחזור המידע המקורי (Payload) לבדיקה
-        payload_str = tx.get_payload_string()
-        
-        return verifying_key.verify(binascii.unhexlify(tx.signature), payload_str.encode())
+        vk = ecdsa.VerifyingKey.from_string(public_key_bytes, curve=ecdsa.SECP256k1)
+        message = tx.get_payload_string().encode()
+        signature_bytes = binascii.unhexlify(tx.signature)
+        return vk.verify(signature_bytes, message)
     except Exception as e:
-        print(f"Signature Error: {e}")
+        print(f"Signature verification failed: {e}")
         return False
 
 @app.route('/balance', methods=['GET'])
 def get_balance():
     return jsonify({
+        "address": server_ledger.address,
         "balance": server_ledger.balance,
         "history": server_ledger.history
-    })
-
-@app.route('/transact', methods=['POST'])
-def transact():
-    data = request.json
-    try:
-        # בניית אובייקט טרנזקציה מהמידע שהתקבל
-        tx = Transaction(**data)
-        
-        print(f"\n[+] New Transaction Received:")
-        print(f"    From: {tx.sender[:10]}...")
-        print(f"    To:   {tx.receiver}")
-        print(f"    Amt:  {tx.amount}")
-
-        # בדיקה האם הבקשה סומנה כ"מאובטחת"
-        is_secure = request.args.get('secure') == 'true'
-
-        if is_secure:
-            print("    [?] Security Mode ON. Verifying signature...")
-            if verify_signature(tx):
-                print("    [V] Signature VALID.")
-                return jsonify({"status": "success", "msg": "Transaction Verified & Approved"}), 200
-            else:
-                print("    [X] Signature INVALID! Blocking transaction.")
-                return jsonify({"status": "error", "msg": "Invalid Signature - Possible Attack!"}), 403
-        else:
-            print("    [!] Security Mode OFF. Accepting blindly.")
-            return jsonify({"status": "success", "msg": "Transaction Accepted (Unverified)"}), 200
-
-    except Exception as e:
-        print(f"Error: {e}")
-        return jsonify({"error": str(e)}), 400
+    }), 200
 
 @app.route('/mine', methods=['POST'])
 def mine():
     data = request.json
     miner_address = data.get("miner_address")
-    
-    # סכום הפרס על כריית בלוק
     BLOCK_REWARD = 50
     
     print(f"\n[⛏️] Mining Request from: {miner_address[:10]}...")
     
     try:
-        server_ledger.credit(BLOCK_REWARD, reason="mining_reward")
-        print(f"    [V] Block Mined! Reward credited. New Balance: {server_ledger.balance}")
+        # 1. עדכון היתרה הכללית
+        server_ledger.balance += BLOCK_REWARD
+        
+        # 2. יצירת הרשומה (הגדרה לפני שימוש!)
+        mining_record = {
+            "type": "mining_reward",
+            "sender": "Network_Reward",
+            "receiver": miner_address,
+            "amount": BLOCK_REWARD,
+            "timestamp": int(time.time())
+        }
+        
+        # 3. שמירה ל-Ledger הראשי
+        server_ledger.history.append(mining_record)
+        server_ledger.save()
+        
+        # 4. שמירה לקובץ האישי (עכשיו המשתמש מוגדר)
+        save_to_personal_file(miner_address, mining_record)
+            
+        # חישוב יתרה אישית להחזרה למשתמש
+        current_user_balance = 0
+        for record in server_ledger.history:
+            if record.get("receiver") == miner_address:
+                current_user_balance += record["amount"]
+            if record.get("sender") == miner_address:
+                current_user_balance -= record["amount"]
+
+        print(f"    [V] Block Mined! User Balance: {current_user_balance}")
         
         return jsonify({
             "status": "success", 
             "msg": f"Block Mined! You earned {BLOCK_REWARD} coins.",
-            "new_balance": server_ledger.balance
+            "new_balance": current_user_balance
         }), 200
         
     except Exception as e:
         print(f"    [X] Mining Error: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/transact', methods=['POST'])
+def transact():
+    try:
+        tx = Transaction.from_json(request.data)
+        
+        print(f"\n[+] New Transaction Received:")
+        print(f"    From: {tx.sender[:10]}...")
+        print(f"    To:   {tx.receiver}")
+        print(f"    Amt:  {tx.amount}")
+
+        is_secure = request.args.get('secure') != 'false' 
+
+        if is_secure:
+            if not tx.signature:
+                 return jsonify({"status": "error", "msg": "Missing Signature"}), 400
+            if not verify_signature(tx):
+                return jsonify({"status": "error", "msg": "Invalid Signature"}), 403
+        
+        # === שלב קריטי: יצירת המשתמש transaction_record כאן ===
+        transaction_record = {
+            "type": "transaction",
+            "sender": tx.sender,
+            "receiver": tx.receiver,
+            "amount": tx.amount,
+            "signature": tx.signature,
+            "timestamp": int(time.time())
+        }
+        
+        # שמירה ל-Ledger הראשי
+        server_ledger.history.append(transaction_record)
+        server_ledger.save()
+        
+        # === שמירה לקבצים האישיים (עכשיו זה יעבוד כי המשתמש קיים) ===
+        save_to_personal_file(tx.sender, transaction_record)   # תיעוד אצל השולח
+        save_to_personal_file(tx.receiver, transaction_record) # תיעוד אצל המקבל
+            
+        print("    [V] Transaction Verified & Recorded.")
+        return jsonify({"status": "success", "msg": "Transaction Recorded"}), 200
+
+    except Exception as e:
+        print(f"Error processing transaction: {e}")
+        return jsonify({"error": str(e)}), 400
+
 if __name__ == '__main__':
-        # מריץ על 0.0.0.0 כדי לאפשר גישה מבחוץ (מה-Windows)
     print("Server running on port 5000...")
     app.run(host='0.0.0.0', port=5000)
