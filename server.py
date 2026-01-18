@@ -4,7 +4,7 @@ from common.protocol import Transaction
 import ecdsa
 import binascii
 
-app = Flask(name)
+app = Flask(__name__)
 
 # יצירת ארנק "בנק" לשרת שישמור את ההיסטוריה
 # נשמור אותו בנתיב נפרד כדי לא לדרוס את הארנק של אליס אם קיים שם
@@ -90,7 +90,7 @@ def mine():
         print(f"    [X] Mining Error: {e}")
         return jsonify({"error": str(e)}), 500
 
-if name == 'main':
-    # מריץ על 0.0.0.0 כדי לאפשר גישה מבחוץ (מה-Windows)
+if __name__ == '__main__':
+        # מריץ על 0.0.0.0 כדי לאפשר גישה מבחוץ (מה-Windows)
     print("Server running on port 5000...")
     app.run(host='0.0.0.0', port=5000)
