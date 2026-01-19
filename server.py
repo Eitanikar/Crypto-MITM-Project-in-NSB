@@ -1,9 +1,13 @@
 from flask import Flask, request, jsonify
+from common.encryption import SecureChannel
 import time
 import ecdsa
 import binascii
 import json
 import os
+
+#אתחל את הערוץ 
+secure_channel = SecureChannel()
 
 # ייבוא המחלקות שלך
 from wallet.wallet import Wallet
@@ -153,6 +157,58 @@ def transact():
         print(f"Error processing transaction: {e}")
         return jsonify({"error": str(e)}), 400
 
+
+@app.route('/transact_secure', methods=['POST'])
+def transact_secure():
+    """
+    נתיב שמקבל רק מידע מוצפן, מפענח אותו, ואז מבצע את הטרנזקציה.
+    זה מדמה תקשורת P2P מוצפנת או TLS.
+    """
+    try:
+        # 1. קבלת המידע המוצפן
+        data = request.json
+        encrypted_content = data.get("data")
+
+        print(f"\n[🔒] Encrypted Request Received: {encrypted_content[:15]}...")
+
+        # 2. פענוח ההצפנה (השרת משתמש במפתח הסודי)
+        decrypted_json_str = secure_channel.decrypt_data(encrypted_content)
+        print(f"    [🔓] Decrypted successfully! Content: {decrypted_json_str}")
+
+        # 3. המרה חזרה לאובייקט Transaction
+        # מכאן והלאה - זה בדיוק כמו טרנזקציה רגילה!
+        tx = Transaction.from_json(decrypted_json_str)
+
+        # --- בדיקות אבטחה רגילות (חתימה) ---
+        if not tx.signature:
+             return jsonify({"status": "error", "msg": "Missing Signature"}), 400
+
+        if not verify_signature(tx):
+            print("    [X] Invalid Signature inside encrypted packet!")
+            return jsonify({"status": "error", "msg": "Invalid Signature"}), 403
+
+        # --- שמירה ל-Ledger (כמו קודם) ---
+        transaction_record = {
+            "type": "transaction",
+            "sender": tx.sender,
+            "receiver": tx.receiver,
+            "amount": tx.amount,
+            "signature": tx.signature,
+            "timestamp": int(time.time())
+        }
+
+        server_ledger.history.append(transaction_record)
+        server_ledger.save()
+        save_to_personal_file(tx.sender, transaction_record)
+        save_to_personal_file(tx.receiver, transaction_record)
+
+        print("    [V] Secure Transaction Recorded.")
+        return jsonify({"status": "success", "msg": "Secure Transaction Recorded"}), 200
+
+    except Exception as e:
+        print(f"    [X] Decryption/Processing Error: {e}")
+        return jsonify({"error": "Failed to process secure transaction"}), 400
+    
 if __name__ == '__main__':
     print("Server running on port 5000...")
     app.run(host='0.0.0.0', port=5000)

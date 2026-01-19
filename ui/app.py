@@ -1,29 +1,32 @@
 import sys
 import os
-
-# הוספת התיקייה הראשית (Parent Directory) לנתיב החיפוש של פייתון
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import streamlit as st
 import requests
 import time
 import json
+
+# הוספת התיקייה הראשית לנתיב החיפוש
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from wallet.wallet import Wallet
 from common.protocol import Transaction
+from common.encryption import SecureChannel
 
 # ==========================================
-# 🔧 הגדרות רשת - כאן מעדכנים את ה-IP
+# 🔧 הגדרות רשת
 # ==========================================
-# שים לב: זה ה-IP של מכונת ה-Kali שלך שראינו בתמונה
-SERVER_IP = "172.20.10.2"
-SERVER_PORT = "5000"
-SERVER_URL = f"http://{SERVER_IP}:{SERVER_PORT}"
+# כרגע אנחנו בבדיקה מקומית, אז נשתמש ב-Localhost
+# כשתחזור ל-Kali, תחליף את זה ל-IP של השרת
+SERVER_URL = "http://127.0.0.1:5000"
 
 # ==========================================
-# 👛 אתחול ארנק מקומי
+# 👛 אתחול ארנק והצפנה
 # ==========================================
-# הארנק הזה משמש כרגע בעיקר לשמירת המפתחות (Private Key)
-# היתרה האמיתית מגיעה מהשרת
-alice_wallet = Wallet(owner="Alice", db_path="./data/ui_alice_wallet.json")
+if 'alice_wallet' not in st.session_state:
+    st.session_state['alice_wallet'] = Wallet(owner="Alice", db_path="./data/ui_alice_wallet.json")
+
+alice_wallet = st.session_state['alice_wallet']
+secure_channel = SecureChannel()
 
 # ==========================================
 # 🖥️ ממשק משתמש (UI Layout)
@@ -31,67 +34,70 @@ alice_wallet = Wallet(owner="Alice", db_path="./data/ui_alice_wallet.json")
 st.set_page_config(page_title="Crypto Wallet Demo", page_icon="🛡️", layout="wide")
 st.title("🛡️ Secure Crypto Wallet (MITM Demo)")
 
+# --- צד ימין: סטטוס וכתובת (מתוקן!) ---
+st.sidebar.header("📡 Network Status")
+
+# בדיקת חיבור לשרת
+network_status = st.sidebar.empty()
+balance_display = st.sidebar.empty()
+
+try:
+    response = requests.get(f"{SERVER_URL}/balance", timeout=2)
+    if response.status_code == 200:
+        data = response.json()
+        server_balance = data.get("balance", 0)
+        network_status.success("Connected ✅")
+        balance_display.metric("Global Balance", f"{server_balance} COINS")
+    else:
+        network_status.warning("Server Error ⚠️")
+except:
+    network_status.error("Offline ❌")
+
+st.sidebar.markdown("---")
+st.sidebar.write("### 🔑 My Wallet Address")
+# התיקון: שימוש ב-code מאפשר העתקה נוחה של כל הכתובת!
+st.sidebar.code(alice_wallet.address, language="text")
+
+
 # --- אזור כרייה (Mining Zone) ---
 with st.expander("⛏️ Miner Zone (Click to earn coins)", expanded=True):
     st.write("Simulate Proof-of-Work to earn coins from the network.")
     
     if st.button("🔨 Mine New Block"):
-        # 1. סימולציה של "עבודה קשה" (חישוב האש)
+        # האפקט הוויזואלי היפה שלך
         progress_text = "Solving cryptographic puzzle..."
         my_bar = st.progress(0, text=progress_text)
         
         for percent_complete in range(100):
-            time.sleep(0.02) # השהייה מלאכותית
+            time.sleep(0.01) 
             my_bar.progress(percent_complete + 1, text=progress_text)
-            
-        time.sleep(0.5)
-        my_bar.empty() # ניקוי הבר
         
-        # 2. שליחת הבקשה לשרת
+        time.sleep(0.2)
+        my_bar.empty()
+        
+        # שליחה לשרת
         try:
-            payload = {"miner_address": alice_wallet.address}
+            payload = {
+                "miner_address": alice_wallet.address,
+                "miner_name": "Alice"
+            }
             res = requests.post(f"{SERVER_URL}/mine", json=payload, timeout=5)
             
             if res.status_code == 200:
                 reward_msg = res.json().get('msg')
                 st.success(f"🎉 {reward_msg}")
-                time.sleep(1.5)
-                st.rerun() # רענון הדף כדי לראות את היתרה החדשה
+                st.balloons()
+                time.sleep(1)
+                st.rerun()
             else:
                 st.error("Mining rejected by server.")
                 
         except Exception as e:
             st.error(f"Connection Error: {e}")
 
-st.markdown("---") # קו מפריד
+st.markdown("---")
 
-# --- צד ימין: סטטוס חיבור לרשת ---
-st.sidebar.header("📡 Network Status")
-st.sidebar.text(f"Server: {SERVER_IP}")
-
-network_status = st.sidebar.empty()
-balance_display = st.sidebar.empty()
-
-# ניסיון התחברות לשרת לקבלת יתרה
-try:
-    response = requests.get(f"{SERVER_URL}/balance", timeout=2)
-    if response.status_code == 200:
-        data = response.json()
-        server_balance = data.get("balance", 0)
-        
-        network_status.success("Connected ✅")
-        balance_display.metric("Global Ledger Balance", f"{server_balance} COINS")
-    else:
-        network_status.warning("Server Error ⚠️")
-except requests.exceptions.ConnectionError:
-    network_status.error("Offline ❌")
-    st.sidebar.error("Cannot reach server. Is it running?")
-
-st.sidebar.markdown("---")
-st.sidebar.info(f"**Local Wallet:**\n\nAddr: `{alice_wallet.address[:10]}...`")
-
-
-# --- אזור ביצוע טרנזקציות ---
+# --- אזור ביצוע טרנזקציות (החדש והמשולב) ---
 st.subheader("💸 Send Transaction")
 
 col1, col2 = st.columns([2, 1])
@@ -101,47 +107,61 @@ with col1:
     amount = st.number_input("Amount to Send", min_value=1, value=10)
 
 with col2:
-    st.write("### 🔒 Security")
-    # זה הכפתור שיקבע אם אנחנו מוגנים או חשופים לתקיפה
-    secure_mode = st.checkbox("Enable Digital Signature", value=False)
+    st.write("### 🔒 Security Level")
     
-    if secure_mode:
-        st.success("Mode: SECURE\n\nTransaction is signed with Private Key.")
+    # בורר מצבים (החלק החשוב להדגמה)
+    security_level = st.radio(
+        "Select Protocol:",
+        ("1. Unsafe (HTTP)", "2. Signed (Integrity)", "3. Encrypted (Confidentiality)"),
+        index=1
+    )
+
+    if "Unsafe" in security_level:
+        st.error("⚠️ VULNERABLE! \nExposed to Sniffing & MITM.")
+    elif "Signed" in security_level:
+        st.warning("🛡️ INTEGRITY OK. \nData visible, cannot be changed.")
     else:
-        st.error("Mode: VULNERABLE\n\nSending plain JSON. Susceptible to MITM!")
+        st.success("🔒 FULLY SECURE. \nData is encrypted.")
 
-# --- כפתור השליחה ---
-if st.button("🚀 Send Transaction", use_container_width=True):
-    
-    # 1. יצירת האובייקט הבסיסי
-    tx = Transaction(sender=alice_wallet.address, receiver=receiver, amount=amount)
-
-    # 2. חתימה (אם המצב המאובטח פעיל)
-    if secure_mode:
+# --- כפתור השליחה (הלוגיקה המאוחדת) ---
+if st.button("🚀 Send Transaction"):
+    try:
+        # 1. יצירת הטרנזקציה וחתימה (תמיד חותמים, השרת מחליט מה לעשות עם זה)
+        tx = alice_wallet.create_transaction(receiver, int(amount))
+        
         payload_to_sign = tx.get_payload_string()
-        tx.signature = alice_wallet.sign_transaction(payload_to_sign)
-        st.caption(f"🔏 Generated Signature: `{tx.signature[:30]}...`")
+        signature = alice_wallet.sign_transaction(payload_to_sign)
+        tx.signature = signature
+        
+        # המרה למילון לשימוש ב-requests
+        tx_dict = json.loads(tx.to_json())
 
-    # 3. שליחה לרשת
-    with st.spinner("Broadcasting to network..."):
-        try:
-            # המרה ל-dict כדי ש-requests ידע לשלוח כ-JSON
-            tx_data = json.loads(tx.to_json())
-            
-            # שליחה לשרת עם פרמטר שמציין אם אנחנו במצב מאובטח
-            res = requests.post(
-                f"{SERVER_URL}/transact?secure={str(secure_mode).lower()}",
-                json=tx_data,
-                timeout=5
-            )
+        # 2. שליחה לפי רמת האבטחה שנבחרה
+        
+        # מצב 3: הצפנה מלאה
+        if "Encrypted" in security_level:
+            with st.spinner("🔒 Encrypting payload..."):
+                encrypted_payload = secure_channel.encrypt_data(tx.to_json())
+                response = requests.post(f"{SERVER_URL}/transact_secure", json={"data": encrypted_payload})
+                
+        # מצב 2: חתימה בלבד (רגיל)
+        elif "Signed" in security_level:
+            with st.spinner("🛡️ Sending signed transaction..."):
+                response = requests.post(f"{SERVER_URL}/transact?secure=true", json=tx_dict)
 
-            if res.status_code == 200:
-                st.balloons()
-                st.success(f"✅ Transaction Sent! Server Response: {res.json().get('msg')}")
-                time.sleep(2)
-                st.rerun() # רענון הדף כדי לעדכן יתרה
-            else:
-                st.error(f"❌ Transaction Rejected: {res.json().get('msg')}")
+        # מצב 1: לא בטוח (פרוץ)
+        else:
+            with st.spinner("⚠️ Sending UNSAFE transaction..."):
+                response = requests.post(f"{SERVER_URL}/transact?secure=false", json=tx_dict)
 
-        except Exception as e:
-            st.error(f"🚨 Connection Failed: {e}")
+        # 3. טיפול בתשובה
+        if response.status_code == 200:
+            st.success(f"✅ Transaction Successful!")
+            st.json(response.json())
+            st.balloons()
+        else:
+            st.error(f"❌ Transaction Failed!")
+            st.write(f"Server Response: {response.text}")
+
+    except Exception as e:
+        st.error(f"❌ Error: {e}")
