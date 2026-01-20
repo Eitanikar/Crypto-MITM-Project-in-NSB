@@ -1,0 +1,41 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "🐍 Debug SERVER (Flask)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "flask",
+            "env": {
+                "FLASK_APP": "server/server.py",
+                "FLASK_DEBUG": "1"
+            },
+            "args": [
+                "run",
+                "--no-debugger",
+                "--no-reload"
+            ],
+            "jinja": true,
+            "justMyCode": true
+        },
+        {
+            "name": "📱 Debug UI (Streamlit)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "streamlit",
+            "args": [
+                "run",
+                "ui/app.py",
+                "--server.port=8501"
+            ],
+            "jinja": true,
+            "justMyCode": true
+        }
+    ],
+    "compounds": [
+        {
+            "name": "🚀 Debug BOTH (Full Stack)",
+            "configurations": ["🐍 Debug SERVER (Flask)", "📱 Debug UI (Streamlit)"]
+        }
+    ]
+}

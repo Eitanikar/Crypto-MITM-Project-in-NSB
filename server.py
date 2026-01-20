@@ -6,7 +6,7 @@ import binascii
 import json
 import os
 
-#אתחל את הערוץ 
+# אתחל את הערוץ 
 secure_channel = SecureChannel()
 
 # ייבוא המחלקות שלך
@@ -16,35 +16,92 @@ from common.protocol import Transaction
 app = Flask(__name__)
 
 # === אתחול ה-Ledger של הבנק ===
-server_ledger = Wallet(owner="Network_Ledger", db_path="./data/server_ledger.json")
+Blockchain_history = Wallet(owner="Network_Ledger", db_path="./data/Blockchain_history.json")
+
+# 1. הנתיב לקובץ הפיזי בדיסק (המחברת)
+MAPPING_FILE = "./data/ip_mapping.json"
+
+# מילון שממפה בין כתובת ארנק לכתובת IP
+# דוגמה: {'fd39c...': '192.168.1.15'}
+wallet_to_ip_map = {}
 
 # --- פונקציית עזר לשמירה בקבצים אישיים ---
 def save_to_personal_file(address, record):
     """
-    שומר רשומה לקובץ JSON ייחודי לפי כתובת הארנק.
-    שם הקובץ יהיה הכתובת עצמה (למשל: data/3a4f...json).
+    שומר רשומה לקובץ JSON תוך שימוש במחלקת Wallet הקיימת.
+    הקובץ ייקרא על שם ה-IP של המשתמש (אם קיים), והיתרה תחושב מחדש לפי ההיסטוריה.
     """
     if not address:
         return
-
-    filename = f"./data/{address}.json"
-    personal_history = []
-
-    # מנסים לטעון היסטוריה קיימת אם הקובץ קיים
-    if os.path.exists(filename):
-        try:
-            with open(filename, "r") as f:
-                personal_history = json.load(f)
-        except:
-            pass 
-            
-    # הוספת הרשומה החדשה
-    personal_history.append(record)
     
-    # שמירה לקובץ
-    with open(filename, "w") as f:
-        json.dump(personal_history, f, indent=4)
+    # 1. מציאת שם הקובץ (שהוא ה-IP)
+    # -------------------------------------------
+    file_identifier = None
 
+    # בדיקה בזיכרון (RAM)
+    if address in wallet_to_ip_map:
+        file_identifier = wallet_to_ip_map[address]
+    else:
+        # בדיקה בדיסק (MAPPING_FILE) למקרה שהשרת אותחל
+        if os.path.exists(MAPPING_FILE):
+            try:
+                with open(MAPPING_FILE, "r") as f:
+                    saved_map = json.load(f)
+                    if address in saved_map:
+                        file_identifier = saved_map[address]
+                        # עדכון הזיכרון לפעם הבאה
+                        wallet_to_ip_map[address] = file_identifier
+            except:
+                pass
+    
+    # אם עדיין לא מצאנו IP, נשתמש בכתובת הארנק כברירת מחדל כדי שהמידע לא יאבד
+    if not file_identifier:
+        file_identifier = address
+
+        # 2. שימוש במחלקת Wallet לניהול הקובץ
+    # -------------------------------------------
+    filepath = f"./data/{file_identifier}.json"
+    # הבנאי של המחלקה שלך חכם: אם נספק לו db_path, הוא ינסה לטעון משם לבד!
+    # ה-owner יהיה ה-IP (או הכתובת אם לא מצאנו IP)
+    user_wallet = Wallet(owner=file_identifier, db_path=filepath)
+
+    # 3. הוספת העסקה החדשה להיסטוריה
+    # -------------------------------------------
+    # שימוש ב-.append() הרגיל של הרשימה בתוך האובייקט
+    user_wallet.history.append(record)
+
+    # 4. חישוב יתרה מחדש (Balance Recalculation)
+    # -------------------------------------------
+    # אנחנו לא סומכים על ה-balance הקיים, אלא מחשבים אותו מאפס לפי ההיסטוריה המעודכנת
+    new_balance = 0
+
+    for tx in user_wallet.history:
+        amount = float(tx.get("amount", 0))
+        receiver = tx.get("receiver") or tx.get("recipient")
+        sender = tx.get("sender")
+        
+        # האם הכסף נכנס לארנק הזה? (בודקים מול הכתובת המקורית שהגיעה לפונקציה)
+        if receiver == address:
+            new_balance += amount
+            
+        # האם זה תגמול כרייה עבור הארנק הזה?
+        elif tx.get("type") == "mining_reward" and tx.get("miner_address") == address:
+            new_balance += amount
+        
+        # האם הכסף יצא מהארנק הזה?
+        if sender == address:
+            new_balance -= amount
+
+    # עדכון השדה באובייקט
+    user_wallet.balance = new_balance
+
+    # 5. שמירה לדיסק
+    # -------------------------------------------
+    # הפונקציה save() במחלקה שלך כבר יודעת להשתמש ב-self.db_path שהגדרנו בבנאי
+    user_wallet.save()
+    
+    print(f"[💾] Saved wallet for {file_identifier} with balance: {new_balance}")
+   
 
 def verify_signature(tx: Transaction):
     """בדיקת חתימה קריפטוגרפית"""
@@ -59,60 +116,69 @@ def verify_signature(tx: Transaction):
         return False
 
 @app.route('/balance', methods=['GET'])
-def get_balance():
+def get_Blockchain_balance():
     return jsonify({
-        "address": server_ledger.address,
-        "balance": server_ledger.balance,
-        "history": server_ledger.history
+        "address": Blockchain_history.address,
+        "balance": Blockchain_history.balance,
+        "history": Blockchain_history.history
     }), 200
+
+@app.route('/get_user_wallet_balance', methods=['GET'])
+def get_user_wallet_balance():
+    # 1. קליטת פרמטרים
+    address = request.args.get('address')
+    client_ip = request.args.get('ip')
+    
+    target_filename = address
+    if address in wallet_to_ip_map:
+        target_filename = wallet_to_ip_map[address]
+    elif client_ip:
+         target_filename = client_ip
+    
+    filepath = f"./data/{target_filename}.json"
+
+ # 2. אם הקובץ קיים, שולחים את כולו
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r") as f:
+                data = json.load(f)
+            return jsonify(data) # שולח גם balance, גם history, הכל!
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    
+    return jsonify({"error": "Wallet not found"}), 404
 
 @app.route('/mine', methods=['POST'])
 def mine():
-    data = request.json
-    miner_address = data.get("miner_address")
-    BLOCK_REWARD = 50
+    # 1. קריאת הנתונים
+    data = request.get_json()
+    miner_address = data.get('miner_address', "Network_Ledger")
+    capture_client_ip(miner_address)
     
-    print(f"\n[⛏️] Mining Request from: {miner_address[:10]}...")
+    reward_amount = 50
     
-    try:
-        # 1. עדכון היתרה הכללית
-        server_ledger.balance += BLOCK_REWARD
-        
-        # 2. יצירת הרשומה (הגדרה לפני שימוש!)
-        mining_record = {
-            "type": "mining_reward",
-            "sender": "Network_Reward",
-            "receiver": miner_address,
-            "amount": BLOCK_REWARD,
-            "timestamp": int(time.time())
-        }
-        
-        # 3. שמירה ל-Ledger הראשי
-        server_ledger.history.append(mining_record)
-        server_ledger.save()
-        
-        # 4. שמירה לקובץ האישי (עכשיו המשתמש מוגדר)
-        save_to_personal_file(miner_address, mining_record)
-            
-        # חישוב יתרה אישית להחזרה למשתמש
-        current_user_balance = 0
-        for record in server_ledger.history:
-            if record.get("receiver") == miner_address:
-                current_user_balance += record["amount"]
-            if record.get("sender") == miner_address:
-                current_user_balance -= record["amount"]
+    # 2. יצירת רשומת הטרנזקציה (פרס כרייה)
+    transaction = {
+        "type": "mining_reward",
+        "sender": "Network_Mining_Reward",
+        "receiver": miner_address,
+        "amount": reward_amount,
+        "timestamp": time.time()
+    }
+    
+    # 3. שמירה ל-Ledger הראשי של השרת
+    Blockchain_history.history.append(transaction)
+    Blockchain_history.save()
+    
+    if miner_address != "Network_Ledger":
+        save_to_personal_file(miner_address, transaction)
 
-        print(f"    [V] Block Mined! User Balance: {current_user_balance}")
-        
-        return jsonify({
-            "status": "success", 
-            "msg": f"Block Mined! You earned {BLOCK_REWARD} coins.",
-            "new_balance": current_user_balance
-        }), 200
-        
-    except Exception as e:
-        print(f"    [X] Mining Error: {e}")
-        return jsonify({"error": str(e)}), 500
+    print(f"[+] Block Mined! Reward sent to: {miner_address[:10]}...")
+
+    return jsonify({
+        "msg": f"Block mined successfully! Reward sent to {miner_address[:10]}...",
+        "amount": reward_amount
+    }), 200
 
 @app.route('/transact', methods=['POST'])
 def transact():
@@ -132,7 +198,9 @@ def transact():
             if not verify_signature(tx):
                 return jsonify({"status": "error", "msg": "Invalid Signature"}), 403
         
-        # === שלב קריטי: יצירת המשתמש transaction_record כאן ===
+        # === דילוג על בדיקת יתרה (Bypass) ===
+        # כאן הייתה הבדיקה if balance < amount. מחקנו אותה כדי לאפשר את התקיפה.
+        
         transaction_record = {
             "type": "transaction",
             "sender": tx.sender,
@@ -143,12 +211,12 @@ def transact():
         }
         
         # שמירה ל-Ledger הראשי
-        server_ledger.history.append(transaction_record)
-        server_ledger.save()
+        Blockchain_history.history.append(transaction_record)
+        Blockchain_history.save()
         
-        # === שמירה לקבצים האישיים (עכשיו זה יעבוד כי המשתמש קיים) ===
-        save_to_personal_file(tx.sender, transaction_record)   # תיעוד אצל השולח
-        save_to_personal_file(tx.receiver, transaction_record) # תיעוד אצל המקבל
+        # שמירה לקבצים האישיים
+        save_to_personal_file(tx.sender, transaction_record)
+        save_to_personal_file(tx.receiver, transaction_record)
             
         print("    [V] Transaction Verified & Recorded.")
         return jsonify({"status": "success", "msg": "Transaction Recorded"}), 200
@@ -160,10 +228,6 @@ def transact():
 
 @app.route('/transact_secure', methods=['POST'])
 def transact_secure():
-    """
-    נתיב שמקבל רק מידע מוצפן, מפענח אותו, ואז מבצע את הטרנזקציה.
-    זה מדמה תקשורת P2P מוצפנת או TLS.
-    """
     try:
         # 1. קבלת המידע המוצפן
         data = request.json
@@ -171,15 +235,13 @@ def transact_secure():
 
         print(f"\n[🔒] Encrypted Request Received: {encrypted_content[:15]}...")
 
-        # 2. פענוח ההצפנה (השרת משתמש במפתח הסודי)
+        # 2. פענוח ההצפנה
         decrypted_json_str = secure_channel.decrypt_data(encrypted_content)
         print(f"    [🔓] Decrypted successfully! Content: {decrypted_json_str}")
 
         # 3. המרה חזרה לאובייקט Transaction
-        # מכאן והלאה - זה בדיוק כמו טרנזקציה רגילה!
         tx = Transaction.from_json(decrypted_json_str)
 
-        # --- בדיקות אבטחה רגילות (חתימה) ---
         if not tx.signature:
              return jsonify({"status": "error", "msg": "Missing Signature"}), 400
 
@@ -187,7 +249,7 @@ def transact_secure():
             print("    [X] Invalid Signature inside encrypted packet!")
             return jsonify({"status": "error", "msg": "Invalid Signature"}), 403
 
-        # --- שמירה ל-Ledger (כמו קודם) ---
+        # שמירה
         transaction_record = {
             "type": "transaction",
             "sender": tx.sender,
@@ -197,8 +259,8 @@ def transact_secure():
             "timestamp": int(time.time())
         }
 
-        server_ledger.history.append(transaction_record)
-        server_ledger.save()
+        Blockchain_history.history.append(transaction_record)
+        Blockchain_history.save()
         save_to_personal_file(tx.sender, transaction_record)
         save_to_personal_file(tx.receiver, transaction_record)
 
@@ -209,6 +271,43 @@ def transact_secure():
         print(f"    [X] Decryption/Processing Error: {e}")
         return jsonify({"error": "Failed to process secure transaction"}), 400
     
+def capture_client_ip(wallet_address):
+    if not wallet_address:
+        return
+
+    client_ip = request.remote_addr
+    
+    # 1. בדיקה מהירה בזיכרון: האם משהו השתנה?
+    # אם הכתובת כבר מוכרת וה-IP הוא אותו IP בדיוק - אל תעשה כלום!
+    if wallet_to_ip_map.get(wallet_address) == client_ip:
+        return 
+
+    # --- אם הגענו לפה, סימן שמשהו חדש קרה! ---
+    
+    # עדכון בזיכרון
+    wallet_to_ip_map[wallet_address] = client_ip
+    
+    # שמירה לקובץ (רק כשצריך באמת)
+    try:
+        current_data = {}
+        if os.path.exists(MAPPING_FILE):
+            with open(MAPPING_FILE, "r") as f:
+                try:
+                    current_data = json.load(f)
+                except:
+                    pass
+        
+        current_data[wallet_address] = client_ip
+        
+        with open(MAPPING_FILE, "w") as f:
+            json.dump(current_data, f, indent=4)
+            
+        print(f"[📝] NEW IP DETECTED! Saved: {wallet_address[:6]}... -> {client_ip}")
+
+    except Exception as e:
+        print(f"[!] Error saving map: {e}")
+
 if __name__ == '__main__':
     print("Server running on port 5000...")
+    # host='0.0.0.0' מאפשר חיבורים חיצוניים (מה-Kali ומהטלפון)
     app.run(host='0.0.0.0', port=5000)
