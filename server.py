@@ -28,79 +28,88 @@ wallet_to_ip_map = {}
 # --- פונקציית עזר לשמירה בקבצים אישיים ---
 def save_to_personal_file(address, record):
     """
-    שומר רשומה לקובץ JSON תוך שימוש במחלקת Wallet הקיימת.
-    הקובץ ייקרא על שם ה-IP של המשתמש (אם קיים), והיתרה תחושב מחדש לפי ההיסטוריה.
+    שומר רשומה לקובץ JSON ומחשב מחדש את היתרה (Balance) בצורה קפדנית.
     """
     if not address:
         return
-    
-    # 1. מציאת שם הקובץ (שהוא ה-IP)
-    # -------------------------------------------
-    file_identifier = None
 
-    # בדיקה בזיכרון (RAM)
+    # 1. מציאת שם הקובץ (לפי IP או כתובת)
+    file_identifier = None
     if address in wallet_to_ip_map:
         file_identifier = wallet_to_ip_map[address]
-    else:
-        # בדיקה בדיסק (MAPPING_FILE) למקרה שהשרת אותחל
-        if os.path.exists(MAPPING_FILE):
-            try:
-                with open(MAPPING_FILE, "r") as f:
-                    saved_map = json.load(f)
-                    if address in saved_map:
-                        file_identifier = saved_map[address]
-                        # עדכון הזיכרון לפעם הבאה
-                        wallet_to_ip_map[address] = file_identifier
-            except:
-                pass
+    elif os.path.exists(MAPPING_FILE):
+        try:
+            with open(MAPPING_FILE, "r") as f:
+                saved_map = json.load(f)
+                if address in saved_map:
+                    file_identifier = saved_map[address]
+                    wallet_to_ip_map[address] = file_identifier
+        except:
+            pass
     
-    # אם עדיין לא מצאנו IP, נשתמש בכתובת הארנק כברירת מחדל כדי שהמידע לא יאבד
     if not file_identifier:
         file_identifier = address
 
-        # 2. שימוש במחלקת Wallet לניהול הקובץ
-    # -------------------------------------------
+    # 2. טעינת הארנק באמצעות המחלקה
     filepath = f"./data/{file_identifier}.json"
-    # הבנאי של המחלקה שלך חכם: אם נספק לו db_path, הוא ינסה לטעון משם לבד!
-    # ה-owner יהיה ה-IP (או הכתובת אם לא מצאנו IP)
-    user_wallet = Wallet(owner=file_identifier, db_path=filepath)
-
-    # 3. הוספת העסקה החדשה להיסטוריה
-    # -------------------------------------------
-    # שימוש ב-.append() הרגיל של הרשימה בתוך האובייקט
-    user_wallet.history.append(record)
-
-    # 4. חישוב יתרה מחדש (Balance Recalculation)
-    # -------------------------------------------
-    # אנחנו לא סומכים על ה-balance הקיים, אלא מחשבים אותו מאפס לפי ההיסטוריה המעודכנת
-    new_balance = 0
-
-    for tx in user_wallet.history:
-        amount = float(tx.get("amount", 0))
-        receiver = tx.get("receiver") or tx.get("recipient")
-        sender = tx.get("sender")
-        
-        # האם הכסף נכנס לארנק הזה? (בודקים מול הכתובת המקורית שהגיעה לפונקציה)
-        if receiver == address:
-            new_balance += amount
-            
-        # האם זה תגמול כרייה עבור הארנק הזה?
-        elif tx.get("type") == "mining_reward" and tx.get("miner_address") == address:
-            new_balance += amount
-        
-        # האם הכסף יצא מהארנק הזה?
-        if sender == address:
-            new_balance -= amount
-
-    # עדכון השדה באובייקט
-    user_wallet.balance = new_balance
-
-    # 5. שמירה לדיסק
-    # -------------------------------------------
-    # הפונקציה save() במחלקה שלך כבר יודעת להשתמש ב-self.db_path שהגדרנו בבנאי
-    user_wallet.save()
     
-    print(f"[💾] Saved wallet for {file_identifier} with balance: {new_balance}")
+    try:
+        # טעינת הארנק (הבנאי יטען מהקובץ אם קיים)
+        user_wallet = Wallet(owner=file_identifier, db_path=filepath)
+        
+        # הוספת הרשומה החדשה
+        user_wallet.history.append(record)
+        
+        # === חישוב יתרה מחדש (התיקון הגדול) ===
+        new_balance = 0
+        print(f"--- Recalculating balance for {file_identifier} ---")
+        
+        for tx in user_wallet.history:
+            try:
+                amount = float(tx.get("amount", 0))
+                
+                # נרמול שמות: בודקים את כל האפשרויות למקבל ולשולח
+                # (לפעמים זה receiver, לפעמים recipient, לפעמים to)
+                tx_receiver = tx.get("receiver") or tx.get("recipient") or tx.get("to")
+                tx_sender = tx.get("sender") or tx.get("from")
+                tx_type = tx.get("type")
+
+                # לוגיקה 1: כסף נכנס (Mining או העברה אליי)
+                is_incoming = False
+                if tx_receiver == address:
+                    is_incoming = True
+                elif tx_type == "mining_reward" and tx.get("miner_address") == address:
+                    is_incoming = True
+                
+                # לוגיקה 2: כסף יוצא (אני השולח)
+                is_outgoing = False
+                if tx_sender == address:
+                    is_outgoing = True
+
+                # ביצוע החשבון
+                if is_incoming:
+                    new_balance += amount
+                    print(f" [+] +{amount} (Reason: Incoming)")
+                elif is_outgoing:
+                    new_balance -= amount
+                    print(f" [-] -{amount} (Reason: Outgoing)")
+                else:
+                    print(f" [?] Ignored tx: {tx}")
+
+            except Exception as e:
+                print(f"Error processing tx inside loop: {e}")
+
+        # עדכון היתרה באובייקט
+        user_wallet.balance = new_balance
+        print(f"=== Final Calculated Balance: {new_balance} ===")
+
+        # 3. שמירה סופית לדיסק
+        user_wallet.save()
+        
+    except Exception as e:
+        print(f"CRITICAL ERROR saving wallet: {e}")
+ 
+            
    
 
 def verify_signature(tx: Transaction):
