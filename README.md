@@ -1,59 +1,73 @@
-***Crypto-Blockchain Project: Security & Mitigation***
-A simulation of a Blockchain environment using ECDSA signatures and a demonstrated Replay Attack.
+# Blockchain Security Simulation: ECDSA and Replay Attack
 
-📌 Overview
-This project explores the intersection of cryptography and protocol security. It features a simplified Blockchain server where transactions are signed using Elliptic Curve Cryptography (ECC), specifically the secp256k1 curve (the same one used by Bitcoin).
+## Project Overview
+This project demonstrates a functional Blockchain environment implemented in Python, focusing on the implementation of digital signatures and the identification of protocol vulnerabilities. The system utilizes Elliptic Curve Digital Signature Algorithm (ECDSA) to secure transactions but remains intentionally vulnerable to a Replay Attack to highlight critical security gaps in basic protocol designs.
 
-The core of the project is demonstrating a Replay Attack vulnerability: showing how a valid, signed transaction can be captured and "replayed" to manipulate account balances, highlighting why signatures alone are not enough for secure protocols.
+---
 
-🚀 Key Features
-Blockchain Server: Built with Python & Flask to manage ledgers and balances.
+## Technical Specifications
 
-Cryptographic Wallets: Using the ecdsa library to generate private/public keys and sign transactions.
+| Component | Technology |
+| :--- | :--- |
+| **Backend** | Python 3, Flask |
+| **Cryptography** | ECDSA (Curve: SECP256k1) |
+| **Frontend** | JavaScript (ES6+), HTML5, CSS3 |
+| **Environment** | Windows / WSL2 (Ubuntu) |
 
-Real-time UI: A frontend dashboard to visualize the blockchain, account history, and live balances.
+---
 
-Security Research: A dedicated attacks/ directory containing scripts for Sniffing and Replay Attacks.
+## Cryptographic Implementation
 
-🏗️ Technical Architecture
-Backend: Python (Flask, Requests, ECDSA)
+The project implements the **secp256k1** elliptic curve for all wallet operations. This specific curve was selected due to its industry-standard status in major cryptocurrencies like Bitcoin.
 
-Frontend: HTML, CSS, JavaScript (Fetch API)
 
-Environment: Developed and tested on Windows & WSL2 (Ubuntu).
 
-⚔️ The Replay Attack Demonstration
-The project includes a documented attack scenario:
+* **Private Key**: A 256-bit random integer used for signing transactions.
+* **Public Key**: A point on the curve derived from the private key, used for signature verification.
+* **Signing Process**: Transactions are hashed and signed using the `ecdsa` library, producing `r` and `s` values that comprise the digital signature.
 
-Capture: A transaction is sent from the wallet to the server over an insecure channel (HTTP).
+---
 
-Intercept: Using a Sniffer script to capture the valid JSON payload (including the signature).
+## Security Analysis: Replay Attack Demonstration
 
-Exploit: Using the replay_attack.py script to resend the exact same signed data multiple times.
+The primary objective of this project is to demonstrate how valid cryptographic signatures can be misused if the protocol lacks state management.
 
-Result: The server accepts the duplicated transactions as "valid" because the signature matches the data, leading to unauthorized fund depletion.
+### Vulnerability Description
+The server validates the mathematical integrity of the signature but does not track if a specific signature has been used previously. This allows an attacker to capture a legitimate transaction and re-submit it to the network.
 
-🛠️ Installation & Usage
-Prerequisites
-Bash
+
+
+### Attack Workflow
+1. **Interception**: Using the `sniffer.py` script, the attacker captures the JSON payload of a valid transaction.
+2. **Repetition**: The `replay_attack.py` script resubmits the exact same payload multiple times to the `/transact` endpoint.
+3. **Exploitation**: The server accepts each duplicate as a new, valid transaction, leading to unauthorized balance depletion.
+
+---
+
+## Implementation Details
+
+### Setup and Installation
+To install the necessary dependencies, run the following command:
+```bash
 pip install flask requests ecdsa flask-cors
-Running the Project
-Start the Server:
-
-Bash
+```
+### Execution Instructions
+1. **Initialize Blockchain Server:**
+```bash
 python server.py
-Launch the Wallet UI: Open index.html in your browser.
-
-Execute Attack (WSL/Linux):
-
-Bash
-cd attacks
+```
+2. **Access Wallet Interfac:** Open `index.html` in a web browser. Ensure the connection is set to `localhost:5000`. 
+3. **Execute Security Attack:** Navigate to the `attacks/` directory in a WSL terminal and run:
+```bash
 python3 replay_attack.py
-🛡️ Future Mitigations
-To prevent this vulnerability, future iterations will include:
+```
+### python3 replay_attack.py
+To secure the protocol against the demonstrated attacks, the following mechanisms are recommended for implementation:
 
-Nonces: Unique transaction counters per address.
+1. **Transaction Nonce:** A unique, incremental counter for each address to ensure signature uniqueness.
 
-Timestamps: Expiration windows for signed messages.
+2. **Timestamp Validation:** Enforcing expiration windows for signed transaction requests.
 
-HTTPS: Encrypting the transport layer to prevent initial sniffing.
+3. **TLS/SSL Encryption:** Protecting the transport layer to prevent initial packet interception.
+
+
